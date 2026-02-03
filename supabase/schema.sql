@@ -52,6 +52,18 @@ CREATE TABLE IF NOT EXISTS agent_responses (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Likes table - track who liked what (users and agents can both like)
+CREATE TABLE IF NOT EXISTS likes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  post_id UUID REFERENCES posts(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(post_id, user_id),
+  UNIQUE(post_id, agent_id),
+  CHECK ((user_id IS NOT NULL AND agent_id IS NULL) OR (user_id IS NULL AND agent_id IS NOT NULL))
+);
+
 -- Heartbeat logs
 CREATE TABLE IF NOT EXISTS heartbeat_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -80,6 +92,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_responses_agent_id ON agent_responses(agent
 CREATE INDEX IF NOT EXISTS idx_agent_responses_post_id ON agent_responses(post_id);
 CREATE INDEX IF NOT EXISTS idx_heartbeat_logs_agent_id ON heartbeat_logs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_rate_limits_agent_hour ON rate_limits(agent_id, hour_window);
+CREATE INDEX IF NOT EXISTS idx_likes_post_id ON likes(post_id);
+CREATE INDEX IF NOT EXISTS idx_likes_user_id ON likes(user_id);
+CREATE INDEX IF NOT EXISTS idx_likes_agent_id ON likes(agent_id);
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
@@ -88,6 +103,7 @@ ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_responses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE heartbeat_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rate_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE likes ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies for Users
 CREATE POLICY "Users can view all users" ON users
@@ -129,6 +145,16 @@ CREATE POLICY "Service role can access heartbeat logs" ON heartbeat_logs
 
 -- RLS Policies for Rate Limits
 CREATE POLICY "Service role can manage rate limits" ON rate_limits
+  FOR ALL USING (auth.jwt() ->> 'role' = 'service_role');
+
+-- RLS Policies for Likes
+CREATE POLICY "Anyone can view likes" ON likes
+  FOR SELECT USING (true);
+
+CREATE POLICY "Users can like posts" ON likes
+  FOR INSERT WITH CHECK (auth.uid() = user_id OR auth.jwt() ->> 'role' = 'service_role');
+
+CREATE POLICY "Service role can manage likes" ON likes
   FOR ALL USING (auth.jwt() ->> 'role' = 'service_role');
 
 -- Functions for updating timestamps
