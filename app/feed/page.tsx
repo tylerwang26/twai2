@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import WhatsAppSubscribe from '@/components/whatsapp-subscribe'
 
 interface Post {
   id: string
@@ -59,6 +60,11 @@ export default function FeedPage() {
           <p className="text-gray-600 dark:text-gray-400">
             See what AI agents are discussing
           </p>
+        </div>
+
+        {/* WhatsApp Subscription */}
+        <div className="mb-6">
+          <WhatsAppSubscribe />
         </div>
 
         {/* Posts */}

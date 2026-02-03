@@ -1,20 +1,26 @@
-import OpenAI from 'openai'
+import axios from 'axios'
 
 /**
- * OpenClaw Integration Module
+ * OpenClaw Integration Module (using Antigravity + Gemini)
  * Provides AI capabilities for agent interactions
  */
 class OpenClawService {
-  private client: OpenAI
+  private apiKey: string
+  private apiUrl: string
+  private model: string
 
   constructor() {
-    this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    })
+    this.apiKey = process.env.ANTIGRAVITY_API_KEY || ''
+    this.apiUrl = process.env.ANTIGRAVITY_API_URL || 'https://api.antigravity.com'
+    this.model = process.env.GEMINI_MODEL || 'gemini-3-flash'
+    
+    if (!this.apiKey) {
+      console.warn('⚠️ Antigravity API key not configured')
+    }
   }
 
   /**
-   * Generate a response using OpenClaw (OpenAI)
+   * Generate a response using Antigravity + Gemini
    */
   async generateResponse(
     prompt: string,
@@ -26,20 +32,53 @@ class OpenClawService {
     }
   ): Promise<string> {
     try {
-      const response = await this.client.chat.completions.create({
-        model: options?.model || 'gpt-4-turbo-preview',
-        messages: [
-          ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
-          { role: 'user' as const, content: prompt },
-        ],
-        temperature: options?.temperature || 0.7,
-        max_tokens: options?.maxTokens || 500,
+      // Combine system prompt and user prompt
+      const messages = []
+      if (systemPrompt) {
+        messages.push({
+          role: 'system',
+          content: systemPrompt
+        })
+      }
+      messages.push({
+        role: 'user',
+        content: prompt
       })
 
-      return response.choices[0]?.message?.content || 'No response generated'
-    } catch (error) {
-      console.error('OpenClaw error:', error)
-      throw new Error('Failed to generate response')
+      const response = await axios.post(
+        `${this.apiUrl}/v1/chat/completions`,
+        {
+          model: options?.model || this.model,
+          messages: messages,
+          temperature: options?.temperature || 0.7,
+          max_tokens: options?.maxTokens || 500,
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 30000, // 30 seconds timeout
+        }
+      )
+
+      // Handle different possible response formats
+      const content = response.data?.choices?.[0]?.message?.content 
+        || response.data?.text 
+        || response.data?.response 
+        || 'No response generated'
+
+      return content
+    } catch (error: any) {
+      console.error('❌ Antigravity/Gemini error:', error.response?.data || error.message)
+      
+      // Provide more detailed error information
+      if (error.response) {
+        console.error('Status:', error.response.status)
+        console.error('Data:', error.response.data)
+      }
+      
+      throw new Error(`Failed to generate response: ${error.message}`)
     }
   }
 
@@ -61,11 +100,12 @@ Description: ${agentConfig.description}
 Skills: ${agentConfig.skills.join(', ')}
 Response Style: ${agentConfig.responseStyle}
 
-Generate a relevant, engaging response to the following post. Keep it concise (under 280 characters).
+Generate a relevant, engaging response to the following post. Keep it concise (under 280 characters like a tweet).
+Be helpful, friendly, and stay in character.
 ${context ? `Additional context: ${context}` : ''}`
 
     return this.generateResponse(postContent, systemPrompt, {
-      maxTokens: 100,
+      maxTokens: 150,
     })
   }
 
@@ -79,28 +119,58 @@ ${context ? `Additional context: ${context}` : ''}`
   ): Promise<boolean> {
     const content = postContent.toLowerCase()
     
-    // Check for trigger words
+    // Check for trigger words first (fast path)
     const hasTriggerWord = triggerWords.some(word => 
       content.includes(word.toLowerCase())
     )
     
-    if (hasTriggerWord) return true
+    if (hasTriggerWord) {
+      console.log('✅ Trigger word found, agent should respond')
+      return true
+    }
 
-    // Use AI to determine relevance
+    // Use AI to determine relevance based on skills
     try {
-      const prompt = `Post: "${postContent}"
-Agent Skills: ${agentSkills.join(', ')}
+      const prompt = `Post content: "${postContent}"
 
-Should this AI agent respond to this post? Answer only YES or NO.`
+Agent's skills: ${agentSkills.join(', ')}
+
+Based on the agent's skills, should this AI agent respond to the post above? 
+Consider if the post topic matches the agent's expertise.
+
+Answer with only "YES" or "NO".`
 
       const response = await this.generateResponse(prompt, undefined, {
-        model: 'gpt-3.5-turbo',
+        model: this.model, // Use fast model for quick decisions
         temperature: 0.3,
         maxTokens: 10,
       })
 
-      return response.trim().toUpperCase().includes('YES')
-    } catch {
+      const shouldRespond = response.trim().toUpperCase().includes('YES')
+      console.log(`🤖 AI decision: ${shouldRespond ? 'RESPOND' : 'SKIP'}`)
+      
+      return shouldRespond
+    } catch (error) {
+      console.error('⚠️ Error in shouldRespond, defaulting to false:', error)
+      return false
+    }
+  }
+
+  /**
+   * Test the API connection
+   */
+  async testConnection(): Promise<boolean> {
+    try {
+      const response = await this.generateResponse(
+        'Hello! Please respond with "OK" if you can read this.',
+        undefined,
+        { maxTokens: 20 }
+      )
+      
+      console.log('✅ API connection successful:', response)
+      return true
+    } catch (error) {
+      console.error('❌ API connection failed:', error)
       return false
     }
   }

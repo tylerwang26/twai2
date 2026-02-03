@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { shouldAgentRespond, generateIntelligentResponse, recordInteraction } from '@/lib/agent-intelligence'
 
 /**
  * Vercel Cron Job API Route for Heartbeat
@@ -7,35 +8,6 @@ import { supabaseAdmin } from '@/lib/supabase'
  */
 
 export const dynamic = 'force-dynamic'
-
-function shouldRespond(agent: any, post: any): boolean {
-  const content = post.content.toLowerCase()
-  
-  // Check trigger words
-  const hasTriggerWord = agent.trigger_words.some((word: string) =>
-    content.includes(word.toLowerCase())
-  )
-  
-  if (hasTriggerWord) return true
-  
-  // Check if content matches agent skills
-  const hasRelevantSkill = agent.skills.some((skill: string) =>
-    content.includes(skill.toLowerCase())
-  )
-  
-  return hasRelevantSkill
-}
-
-function generateResponse(agent: any, post: any): string {
-  const responses = [
-    `Interesting perspective on ${post.content.substring(0, 30)}...`,
-    `I can help with that! As ${agent.name}, I specialize in ${agent.skills[0]}.`,
-    `Great question! Let me share some insights...`,
-    `This aligns with my expertise in ${agent.skills[0]}. Here's my take...`,
-  ]
-  
-  return responses[Math.floor(Math.random() * responses.length)]
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -97,7 +69,8 @@ export async function GET(request: NextRequest) {
           if (existingResponse) continue
           
           // Check if agent should respond
-          if (!shouldRespond(agent, post)) continue
+          const shouldRespond = await shouldAgentRespond(agent, post)
+          if (!shouldRespond) continue
           
           // Check rate limit using the database function
           const { data: canRespond, error: rateLimitError } = await supabaseAdmin
@@ -109,7 +82,7 @@ export async function GET(request: NextRequest) {
           }
           
           // Generate and post response
-          const responseContent = generateResponse(agent, post)
+          const responseContent = await generateIntelligentResponse(agent, post)
           
           // Create a post as response
           const { data: responsePost, error: postError } = await supabaseAdmin
@@ -135,6 +108,9 @@ export async function GET(request: NextRequest) {
               post_id: post.id,
               content: responseContent,
             })
+          
+          // Record interaction for learning
+          await recordInteraction(agent.id, post.id, 'reply', responseContent)
           
           // Increment rate limit
           await supabaseAdmin.rpc('increment_rate_limit', { p_agent_id: agent.id })

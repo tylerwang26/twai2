@@ -197,3 +197,95 @@ VALUES (
   20,
   'active'
 ) ON CONFLICT DO NOTHING;
+
+-- Agent Personalities table for tracking personality traits and evolution
+CREATE TABLE IF NOT EXISTS agent_personalities (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE NOT NULL UNIQUE,
+  traits JSONB NOT NULL DEFAULT '{}',
+  content_preferences TEXT[] DEFAULT '{}',
+  interaction_patterns TEXT[] DEFAULT '{}',
+  evolution_stage INTEGER DEFAULT 0,
+  total_interactions INTEGER DEFAULT 0,
+  positive_feedback_count INTEGER DEFAULT 0,
+  negative_feedback_count INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Agent Learning History - track what agents learn over time
+CREATE TABLE IF NOT EXISTS agent_learning_history (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE NOT NULL,
+  interaction_type TEXT NOT NULL,
+  learned_from_post_id UUID REFERENCES posts(id) ON DELETE SET NULL,
+  insight TEXT NOT NULL,
+  applied_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Agent Interactions - detailed tracking for evolution
+CREATE TABLE IF NOT EXISTS agent_interactions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE NOT NULL,
+  post_id UUID REFERENCES posts(id) ON DELETE CASCADE NOT NULL,
+  interaction_type TEXT NOT NULL CHECK (interaction_type IN ('reply', 'like', 'observe')),
+  response_generated TEXT,
+  engagement_score INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_agent_personalities_agent_id ON agent_personalities(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_learning_history_agent_id ON agent_learning_history(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_interactions_agent_id ON agent_interactions(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_interactions_post_id ON agent_interactions(post_id);
+
+-- RLS Policies
+ALTER TABLE agent_personalities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_learning_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_interactions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can view agent personalities" ON agent_personalities
+  FOR SELECT USING (true);
+
+CREATE POLICY "Service role can manage agent personalities" ON agent_personalities
+  FOR ALL USING (auth.jwt() ->> 'role' = 'service_role');
+
+CREATE POLICY "Service role can manage learning history" ON agent_learning_history
+  FOR ALL USING (auth.jwt() ->> 'role' = 'service_role');
+
+CREATE POLICY "Service role can manage interactions" ON agent_interactions
+  FOR ALL USING (auth.jwt() ->> 'role' = 'service_role');
+
+-- Trigger for agent_personalities updated_at
+CREATE TRIGGER update_agent_personalities_updated_at BEFORE UPDATE ON agent_personalities
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Function to evolve agent personality based on interactions
+CREATE OR REPLACE FUNCTION evolve_agent_personality(p_agent_id UUID)
+RETURNS VOID AS $$
+DECLARE
+  current_stage INTEGER;
+  total_interactions INTEGER;
+BEGIN
+  -- Get current evolution stage and interactions
+  SELECT evolution_stage, agent_personalities.total_interactions 
+  INTO current_stage, total_interactions
+  FROM agent_personalities
+  WHERE agent_id = p_agent_id;
+  
+  -- Evolve every 50 interactions
+  IF total_interactions > 0 AND total_interactions % 50 = 0 THEN
+    UPDATE agent_personalities
+    SET evolution_stage = evolution_stage + 1,
+        updated_at = NOW()
+    WHERE agent_id = p_agent_id;
+    
+    -- Log the evolution
+    INSERT INTO agent_learning_history (agent_id, interaction_type, insight)
+    VALUES (p_agent_id, 'evolution', 
+            'Agent evolved to stage ' || (current_stage + 1) || ' after ' || total_interactions || ' interactions');
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
