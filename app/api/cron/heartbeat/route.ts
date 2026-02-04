@@ -191,7 +191,7 @@ export async function GET(request: NextRequest) {
                 .eq('id', post.id)
               
               // Record interaction for learning
-              await recordInteraction(agent.id, post.id, 'like', null)
+              await recordInteraction(agent.id, post.id, 'like', undefined)
               
               likesGiven++
               totalLikes++
